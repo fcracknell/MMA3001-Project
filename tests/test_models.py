@@ -6,7 +6,9 @@ import pytest
 
 from sgp4corr.evaluate import bootstrap_median_reduction, error_table, remaining_error, summarise
 from sgp4corr.features import FEATURE_COLUMNS
-from sgp4corr.models import add_physics_terms, assign_splits, train_and_predict
+from sgp4corr.models import (
+    GB_COLUMNS, add_physics_terms, assign_splits, predict_gb, train_and_predict,
+)
 
 
 @pytest.fixture(scope="module")
@@ -92,3 +94,19 @@ def test_remaining_error_for_sgp4_is_the_raw_residual():
     assert np.allclose(remaining_error(predictions, "GB"), [[0.0, -1.0, 0.5]])
     with pytest.raises(KeyError):
         remaining_error(predictions, "RIDGE")
+
+
+def test_corrections_vanish_at_zero_horizon(table):
+    """Physically, there is no propagation error at the element set's own epoch."""
+    _, models, _ = train_and_predict(table, n_candidates=1, max_iter=30)
+    rows = add_physics_terms(table.head(200))
+    at_zero = rows.assign(HORIZON_DAYS=0.0)
+    at_zero = add_physics_terms(at_zero)
+    at_week = add_physics_terms(rows.assign(HORIZON_DAYS=7.0))
+    from sgp4corr.models import RIDGE_COLUMNS
+    for target, ridge in models["RIDGE"].items():
+        assert np.allclose(ridge.predict(at_zero[RIDGE_COLUMNS]), 0.0)
+    for target, gb in models["GB"].items():
+        near_zero = np.abs(predict_gb(gb, at_zero)).mean()
+        week = np.abs(predict_gb(gb, at_week)).mean()
+        assert near_zero <= week / 100          # floor of 1 hour vs 7 days = 1/168

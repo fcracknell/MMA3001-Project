@@ -8,6 +8,12 @@ Three methods are compared on held-out objects and a held-out time period:
 * ``GB``    - the main model: gradient-boosted trees on all features, one
   model per RTN component.
 
+Both learned methods are constrained so that the correction vanishes at zero
+horizon, as it must physically (an element set has no propagation error at its
+own epoch): every ridge term is proportional to the horizon and there is no
+intercept, and the trees predict the residual *per day of horizon*, which is
+then multiplied by the horizon.
+
 Each model predicts the SGP4 residual (prediction minus reference). The
 corrected prediction is the SGP4 position minus the predicted residual.
 
@@ -40,9 +46,13 @@ if __package__ in (None, ""):                      # allow `python src/sgp4corr/
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sgp4corr.features import FEATURE_COLUMNS, TARGET_COLUMNS
 
-PHYSICS_TERMS = ["H2", "BSTAR_H2", "PREV_RATE_H", "PREV_RATE_H2"]
-RIDGE_COLUMNS = ["HORIZON_DAYS", "H2", "BSTAR_H2", "PREV_DR_KM", "PREV_DT_KM", "PREV_DN_KM",
+PHYSICS_TERMS = ["H2", "BSTAR_H2", "PREV_DR_H", "PREV_DT_H", "PREV_DN_H",
                  "PREV_RATE_H", "PREV_RATE_H2"]
+# Every ridge term is zero at zero horizon, so the ridge correction is too.
+RIDGE_COLUMNS = ["HORIZON_DAYS", "H2", "BSTAR_H2", "PREV_DR_H", "PREV_DT_H", "PREV_DN_H",
+                 "PREV_RATE_H", "PREV_RATE_H2"]
+# Shortest horizon used when scaling the tree target, to avoid dividing by ~0.
+HORIZON_FLOOR_DAYS = 1.0 / 24.0
 GB_COLUMNS = [*FEATURE_COLUMNS, *PHYSICS_TERMS]
 
 RIDGE_ALPHAS = [1.0, 10.0, 100.0, 1_000.0, 10_000.0]
@@ -69,6 +79,9 @@ def add_physics_terms(table: pd.DataFrame) -> pd.DataFrame:
     h = out["HORIZON_DAYS"]
     out["H2"] = h**2
     out["BSTAR_H2"] = out["BSTAR"] * h**2
+    out["PREV_DR_H"] = out["PREV_DR_KM"] * h
+    out["PREV_DT_H"] = out["PREV_DT_KM"] * h
+    out["PREV_DN_H"] = out["PREV_DN_KM"] * h
     out["PREV_RATE_H"] = out["PREV_DT_RATE"] * h
     out["PREV_RATE_H2"] = out["PREV_DT_RATE"] * h**2
     return out
@@ -137,6 +150,10 @@ def fit_ridge(train: pd.DataFrame, val: pd.DataFrame, target: str):
     """Fit the ridge baseline for one residual component.
 
     Missing history features are filled with zero (no recent error known).
+    There is no intercept and the features are scaled but not centred, so the
+    prediction is exactly zero at zero horizon. Without this constraint the
+    intercept absorbs the mean of the heavy-tailed residuals and shifts every
+    prediction, including short-horizon ones where SGP4 is already accurate.
     The regularisation strength is the candidate with the lowest validation
     mean absolute error.
 
@@ -151,12 +168,35 @@ def fit_ridge(train: pd.DataFrame, val: pd.DataFrame, target: str):
     best = (np.inf, None, None)
     for alpha in RIDGE_ALPHAS:
         model = make_pipeline(SimpleImputer(strategy="constant", fill_value=0.0),
-                              StandardScaler(), Ridge(alpha=alpha))
+                              StandardScaler(with_mean=False),
+                              Ridge(alpha=alpha, fit_intercept=False))
         model.fit(train[RIDGE_COLUMNS], train[target])
         mae = np.mean(np.abs(val[target] - model.predict(val[RIDGE_COLUMNS])))
         if mae < best[0]:
             best = (mae, model, alpha)
     return best[1], best[2]
+
+
+def horizon_scale(table: pd.DataFrame) -> np.ndarray:
+    """Horizon in days, floored at ``HORIZON_FLOOR_DAYS``, used to scale the tree target."""
+    return np.maximum(table["HORIZON_DAYS"].to_numpy(dtype=float), HORIZON_FLOOR_DAYS)
+
+
+def predict_gb(model: HistGradientBoostingRegressor, table: pd.DataFrame) -> np.ndarray:
+    """Residual in km predicted by a model from ``fit_gb``.
+
+    The trees predict the residual per day of horizon; multiplying by the
+    horizon converts it back to km and makes the correction shrink to
+    (almost) zero at short horizons.
+
+    Args:
+        model: A model returned by ``fit_gb``.
+        table: Rows with the ``GB_COLUMNS`` features.
+
+    Returns:
+        Predicted residual in km for each row.
+    """
+    return model.predict(table[GB_COLUMNS]) * horizon_scale(table)
 
 
 def fit_gb(
@@ -170,10 +210,12 @@ def fit_gb(
     """Fit gradient-boosted trees for one residual component.
 
     Uses absolute-error loss, which is robust to the heavy-tailed residuals.
-    The number of trees is chosen by early stopping on the validation
-    *objects*: the model is trained for ``max_iter`` trees, the validation
-    error after each tree is evaluated, and the model is refitted with the
-    best count.
+    The trees learn the residual divided by the horizon, weighted by the
+    horizon, which is equivalent to minimising the absolute error in km while
+    forcing the correction to scale with the horizon (use ``predict_gb``).
+    The number of trees is chosen by early stopping on the validation set:
+    the model is trained for ``max_iter`` trees, the validation error after
+    each tree is evaluated, and the model is refitted with the best count.
 
     Args:
         train: Training rows (with physics terms).
@@ -185,6 +227,7 @@ def fit_gb(
 
     Returns:
         Tuple of (fitted model, validation MAE in km, number of trees used).
+        Predict with ``predict_gb``, not ``model.predict``.
     """
     settings = {**DEFAULT_GB_PARAMS, **(params or {})}
 
@@ -194,12 +237,19 @@ def fit_gb(
             random_state=seed, **settings,
         )
 
-    model = make(max_iter).fit(train[GB_COLUMNS], train[target])
-    y_val = val[target].to_numpy()
-    curve = [np.mean(np.abs(y_val - p)) for p in model.staged_predict(val[GB_COLUMNS])]
+    scale = horizon_scale(train)
+    y_scaled = train[target].to_numpy(dtype=float) / scale
+
+    def fit(n_trees):
+        return make(n_trees).fit(train[GB_COLUMNS], y_scaled, sample_weight=scale)
+
+    model = fit(max_iter)
+    y_val = val[target].to_numpy(dtype=float)
+    val_scale = horizon_scale(val)
+    curve = [np.mean(np.abs(y_val - p * val_scale)) for p in model.staged_predict(val[GB_COLUMNS])]
     best_iter = int(np.argmin(curve)) + 1
     if best_iter < max_iter:
-        model = make(best_iter).fit(train[GB_COLUMNS], train[target])
+        model = fit(best_iter)
     return model, float(curve[best_iter - 1]), best_iter
 
 
@@ -296,7 +346,7 @@ def train_and_predict(
         test[f"PRED_{target}_RIDGE"] = models["RIDGE"][target].predict(test[RIDGE_COLUMNS])
         start = time.perf_counter()
         models["GB"][target], mae, n_trees = fit_gb(train, val, target, best_params, max_iter, seed)
-        test[f"PRED_{target}_GB"] = models["GB"][target].predict(test[GB_COLUMNS])
+        test[f"PRED_{target}_GB"] = predict_gb(models["GB"][target], test)
         sgp4_mae = np.mean(np.abs(val[target]))
         print(f"{target}: ridge alpha {alpha}; GB {n_trees} trees, val MAE {mae:.4f} km "
               f"vs uncorrected {sgp4_mae:.4f} km "
