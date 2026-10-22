@@ -43,6 +43,8 @@ def test_split_separates_objects_and_time(table):
     assert not objects["train"] & objects["val"]
     assert not objects["val"] & objects["test"]
     assert (table.loc[split.isin(["train", "val"]), "EPOCH_J"] < cutoff).all()
+    # validation comes after all training data, so tuning cannot reward memorising a period
+    assert table.loc[split == "train", "EPOCH_J"].max() <= table.loc[split == "val", "EPOCH_I"].min()
     assert (table.loc[split == "test", "EPOCH_I"] >= cutoff).all()
     # stratified: every band appears in the test set
     assert table.loc[split == "test", "BAND"].nunique() == 2

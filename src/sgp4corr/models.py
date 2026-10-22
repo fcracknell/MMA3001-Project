@@ -45,7 +45,7 @@ RIDGE_COLUMNS = ["HORIZON_DAYS", "H2", "BSTAR_H2", "PREV_DR_KM", "PREV_DT_KM", "
                  "PREV_RATE_H", "PREV_RATE_H2"]
 GB_COLUMNS = [*FEATURE_COLUMNS, *PHYSICS_TERMS]
 
-RIDGE_ALPHAS = [0.1, 1.0, 10.0, 100.0]
+RIDGE_ALPHAS = [1.0, 10.0, 100.0, 1_000.0, 10_000.0]
 DEFAULT_GB_PARAMS = {"learning_rate": 0.1, "max_leaf_nodes": 31,
                      "min_samples_leaf": 50, "l2_regularization": 0.0}
 GB_SEARCH_SPACE = {"learning_rate": [0.03, 0.05, 0.1, 0.2], "max_leaf_nodes": [15, 31, 63, 127],
@@ -79,20 +79,26 @@ def assign_splits(
     fractions: tuple[float, float, float] = (0.70, 0.15, 0.15),
     test_months: float = 3.0,
     seed: int = 0,
+    val_months: float = 3.0,
 ) -> tuple[pd.Series, pd.Timestamp]:
     """Split pairs into train, validation and test sets by object and by time.
 
     Whole objects are assigned to one set, stratified by altitude band, so the
-    test set contains only objects the models have never seen. The test set is
-    also restricted to the final ``test_months`` of data, and training and
-    validation pairs must end before that period starts, so no model sees the
-    space weather of the test period.
+    validation and test sets contain only objects the models have never seen.
+    The sets are also separated in time: training data ends where the
+    ``val_months`` validation period begins, and validation ends where the
+    final ``test_months`` test period begins. Separating validation in time
+    matters: if it shared the training period, hyperparameter tuning and early
+    stopping would reward models that memorise conditions of that period
+    (e.g. through slowly varying space weather), which do not carry over to
+    the future.
 
     Args:
         table: Feature table with ``NORAD_CAT_ID, BAND, EPOCH_I, EPOCH_J``.
         fractions: Fractions of objects for (train, validation, test).
-        test_months: Length of the held-out period at the end of the data.
+        test_months: Length of the held-out test period at the end of the data.
         seed: Random seed for the object assignment.
+        val_months: Length of the validation period just before the test period.
 
     Returns:
         Tuple of (series of ``"train" / "val" / "test" / "unused"`` aligned
@@ -117,11 +123,12 @@ def assign_splits(
         role.update(dict.fromkeys(ids[n_test + n_val:], "train"))
 
     cutoff = table["EPOCH_J"].max() - pd.Timedelta(days=30.44 * test_months)
+    val_cutoff = cutoff - pd.Timedelta(days=30.44 * val_months)
     object_role = table["NORAD_CAT_ID"].map(role)
-    before = table["EPOCH_J"] < cutoff
     split = pd.Series("unused", index=table.index, name="SPLIT")
-    split[(object_role == "train") & before] = "train"
-    split[(object_role == "val") & before] = "val"
+    split[(object_role == "train") & (table["EPOCH_J"] < val_cutoff)] = "train"
+    split[(object_role == "val") & (table["EPOCH_I"] >= val_cutoff)
+          & (table["EPOCH_J"] < cutoff)] = "val"
     split[(object_role == "test") & (table["EPOCH_I"] >= cutoff)] = "test"
     return split, cutoff
 
@@ -222,7 +229,8 @@ def search_gb_params(
 
     Returns:
         One row per candidate with its hyperparameters, validation MAE (km),
-        trees used and fit time, sorted best first.
+        trees used and fit time, sorted best first. ``VAL_MAE_SGP4_KM`` is the
+        validation MAE with no correction, for comparison.
     """
     rng = np.random.default_rng(seed)
     sample = train.sample(n=min(sample_rows, len(train)), random_state=seed)
@@ -232,13 +240,15 @@ def search_gb_params(
         if candidate not in candidates:
             candidates.append(candidate)
 
+    baseline = float(np.mean(np.abs(val[target])))
     rows = []
     for n, candidate in enumerate(candidates, start=1):
         start = time.perf_counter()
         _, mae, n_trees = fit_gb(sample, val, target, candidate, max_iter, seed)
-        rows.append({**candidate, "VAL_MAE_KM": mae, "TREES": n_trees,
+        rows.append({**candidate, "VAL_MAE_KM": mae, "VAL_MAE_SGP4_KM": baseline, "TREES": n_trees,
                      "FIT_SECONDS": round(time.perf_counter() - start, 1)})
-        print(f"Search {n}/{len(candidates)}: val MAE {mae:.4f} km  {candidate}")
+        print(f"Search {n}/{len(candidates)}: val MAE {mae:.4f} km "
+              f"(uncorrected {baseline:.4f})  {candidate}")
     return pd.DataFrame(rows).sort_values("VAL_MAE_KM").reset_index(drop=True)
 
 
@@ -273,7 +283,8 @@ def train_and_predict(
         if part.empty:
             raise ValueError(f"The {name} split is empty.")
         print(f"{name:>5}: {len(part):>9,} pairs from {part['NORAD_CAT_ID'].nunique():>3} objects")
-    print(f"Test period starts {cutoff:%Y-%m-%d}.")
+    print(f"Validation period starts {val['EPOCH_I'].min():%Y-%m-%d}; "
+          f"test period starts {cutoff:%Y-%m-%d}.")
 
     search = search_gb_params(train, val, n_candidates=n_candidates, seed=seed)
     best_params = {k: search.loc[0, k].item() for k in GB_SEARCH_SPACE}
@@ -286,7 +297,9 @@ def train_and_predict(
         start = time.perf_counter()
         models["GB"][target], mae, n_trees = fit_gb(train, val, target, best_params, max_iter, seed)
         test[f"PRED_{target}_GB"] = models["GB"][target].predict(test[GB_COLUMNS])
+        sgp4_mae = np.mean(np.abs(val[target]))
         print(f"{target}: ridge alpha {alpha}; GB {n_trees} trees, val MAE {mae:.4f} km "
+              f"vs uncorrected {sgp4_mae:.4f} km "
               f"({time.perf_counter() - start:.0f} s)")
     return test, models, search
 
