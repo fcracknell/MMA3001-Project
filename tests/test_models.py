@@ -85,6 +85,10 @@ def test_models_learn_a_known_relationship(table):
     assert (stats[("median_cut_%", "RIDGE")] > 50).all()
     estimate, low, high = bootstrap_median_reduction(errors, "RIDGE", column="ALONG_KM", n_resamples=50)
     assert low <= estimate <= high and low > 50
+    for statistic in ("p95", "rmse"):
+        estimate, low, high = bootstrap_median_reduction(
+            errors, "RIDGE", column="ALONG_KM", n_resamples=20, statistic=statistic)
+        assert low <= estimate <= high
 
 
 def test_remaining_error_for_sgp4_is_the_raw_residual():

@@ -103,14 +103,22 @@ def summarise(errors: pd.DataFrame, by: list[str], column: str = "TOTAL_KM") -> 
     return stats
 
 
+STATISTICS = {
+    "median": np.median,
+    "p95": lambda x: np.percentile(x, 95),
+    "rmse": lambda x: np.sqrt(np.mean(x**2)),
+}
+
+
 def bootstrap_median_reduction(
     errors: pd.DataFrame,
     method: str,
     column: str = "TOTAL_KM",
     n_resamples: int = 500,
     seed: int = 0,
+    statistic: str = "median",
 ) -> tuple[float, float, float]:
-    """Confidence interval for a method's reduction in median error.
+    """Confidence interval for a method's reduction in an error statistic.
 
     Pairs from one object are strongly correlated, so whole objects are
     resampled with replacement rather than individual pairs.
@@ -121,11 +129,17 @@ def bootstrap_median_reduction(
         column: Error column to use.
         n_resamples: Number of bootstrap resamples.
         seed: Random seed.
+        statistic: ``"median"``, ``"p95"`` or ``"rmse"``.
 
     Returns:
         Tuple of (point estimate, 2.5th percentile, 97.5th percentile) of the
-        percentage reduction in median error relative to SGP4.
+        percentage reduction in the statistic relative to SGP4 (positive
+        means the method is better).
+
+    Raises:
+        KeyError: If ``statistic`` is not recognised.
     """
+    stat = STATISTICS[statistic]
     def per_object(name):
         subset = errors[errors["METHOD"] == name]
         return {k: v.to_numpy() for k, v in subset.groupby("NORAD_CAT_ID")[column]}
@@ -134,8 +148,8 @@ def bootstrap_median_reduction(
     ids = np.array(sorted(base))
 
     def reduction(sample_ids):
-        b = np.median(np.concatenate([base[i] for i in sample_ids]))
-        c = np.median(np.concatenate([corrected[i] for i in sample_ids]))
+        b = stat(np.concatenate([base[i] for i in sample_ids]))
+        c = stat(np.concatenate([corrected[i] for i in sample_ids]))
         return 100.0 * (1.0 - c / b)
 
     rng = np.random.default_rng(seed)
@@ -213,13 +227,18 @@ def report(predictions: pd.DataFrame, out_dir: Path) -> None:
     print("Median position error (km) by band and horizon:")
     print(by_band_horizon[["median", "median_cut_%"]].round(3).to_string(), "\n")
 
+    print("Reduction in position error vs SGP4 (positive = better; 95% CI, bootstrap over objects):")
+    rows = []
     for method in [m for m in METHODS[1:] if m in errors["METHOD"].unique()]:
-        estimate, low, high = bootstrap_median_reduction(errors, method)
-        print(f"{method}: median position error reduced by {estimate:.1f}% "
-              f"(95% CI {low:.1f}% to {high:.1f}%, bootstrap over objects)")
+        for statistic in STATISTICS:
+            estimate, low, high = bootstrap_median_reduction(errors, method, statistic=statistic)
+            rows.append({"METHOD": method, "STATISTIC": statistic, "REDUCTION_%": estimate,
+                         "CI_LOW_%": low, "CI_HIGH_%": high})
+            print(f"  {method:<5} {statistic:<6} {estimate:7.1f}%  ({low:6.1f}% to {high:6.1f}%)")
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out_dir / "results_bootstrap.csv", index=False)
     by_band.to_csv(out_dir / "results_by_band.csv")
     by_band_horizon.to_csv(out_dir / "results_by_band_horizon.csv")
     along.to_csv(out_dir / "results_along_track_by_band.csv")
