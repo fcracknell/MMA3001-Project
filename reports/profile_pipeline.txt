@@ -1,0 +1,23 @@
+         99651 function calls (98786 primitive calls) in 0.156 seconds
+
+   Ordered by: cumulative time
+   List reduced from 824 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.003    0.003    0.156    0.156 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\performance.py:190(run)
+        1    0.008    0.008    0.065    0.065 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:161(build_pairs)
+        1    0.001    0.001    0.047    0.047 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:48(load_history)
+        1    0.006    0.006    0.041    0.041 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\features.py:130(history_features)
+     3092    0.024    0.000    0.027    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:95(make_satrec)
+        1    0.020    0.020    0.025    0.025 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:126(select_pair_indices)
+        2    0.000    0.000    0.013    0.007 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:702(__init__)
+       34    0.000    0.000    0.012    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:4337(__getitem__)
+        1    0.000    0.000    0.011    0.011 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:463(nested_data_to_arrays)
+        1    0.000    0.000    0.011    0.011 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:759(to_arrays)
+        2    0.000    0.000    0.010    0.005 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:2125(to_dict)
+        2    0.004    0.002    0.010    0.005 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\methods\to_dict.py:97(to_dict)
+        1    0.000    0.000    0.008    0.008 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:900(_finalize_columns_and_data)
+        1    0.000    0.000    0.008    0.008 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:977(convert_object_array)
+       40    0.002    0.000    0.008    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:999(convert)
+
+

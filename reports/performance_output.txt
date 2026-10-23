@@ -1,0 +1,83 @@
+== SGP4 runtime ==
+Initialise from element set:      4.80 us
+Propagate, one call:              0.38 us
+Propagate, vectorised array:      0.17 us per epoch
+
+== Correction runtime and size (all three RTN components) ==
+METHOD  BATCH_US_PER_PREDICTION  SINGLE_PREDICTION_MS  SIZE_KB               WORK_PER_PREDICTION  TREES    NODES
+ RIDGE                    0.508                 5.801    4.919     ~96 floating-point operations    NaN      NaN
+    GB                    4.770                11.025 7599.521 ~4398 comparisons + 534 additions  534.0 135102.0
+
+GB correction costs 12.5x one SGP4 call per prediction (batched). History features need one extra SGP4 propagation per element set.
+
+== cProfile: pairs + ORIGINAL history features for object 178 ==
+         438203 function calls (437335 primitive calls) in 0.374 seconds
+
+   Ordered by: cumulative time
+   List reduced from 834 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.003    0.003    0.374    0.374 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\performance.py:190(run)
+        1    0.010    0.010    0.242    0.242 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\features.py:194(history_features_loop)
+     1541    0.009    0.000    0.193    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\frames.py:51(to_rtn)
+     1541    0.015    0.000    0.158    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\frames.py:20(rtn_basis)
+     3082    0.036    0.000    0.117    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\numeric.py:1567(cross)
+        1    0.007    0.007    0.076    0.076 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:161(build_pairs)
+     9246    0.019    0.000    0.072    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\numeric.py:1493(moveaxis)
+        1    0.001    0.001    0.053    0.053 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:48(load_history)
+    18492    0.028    0.000    0.045    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\numeric.py:1431(normalize_axis_tuple)
+     3092    0.035    0.000    0.039    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:95(make_satrec)
+        1    0.023    0.023    0.030    0.030 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:126(select_pair_indices)
+     3082    0.009    0.000    0.015    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\linalg\_linalg.py:2598(norm)
+        2    0.000    0.000    0.015    0.007 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:702(__init__)
+     4623    0.004    0.000    0.015    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\fromnumeric.py:2304(sum)
+    10981    0.013    0.000    0.013    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+
+
+== cProfile: pairs + VECTORISED history features for object 178 ==
+         99651 function calls (98786 primitive calls) in 0.156 seconds
+
+   Ordered by: cumulative time
+   List reduced from 824 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.003    0.003    0.156    0.156 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\performance.py:190(run)
+        1    0.008    0.008    0.065    0.065 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:161(build_pairs)
+        1    0.001    0.001    0.047    0.047 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:48(load_history)
+        1    0.006    0.006    0.041    0.041 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\features.py:130(history_features)
+     3092    0.024    0.000    0.027    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:95(make_satrec)
+        1    0.020    0.020    0.025    0.025 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:126(select_pair_indices)
+        2    0.000    0.000    0.013    0.007 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:702(__init__)
+       34    0.000    0.000    0.012    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:4337(__getitem__)
+        1    0.000    0.000    0.011    0.011 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:463(nested_data_to_arrays)
+        1    0.000    0.000    0.011    0.011 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:759(to_arrays)
+        2    0.000    0.000    0.010    0.005 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:2125(to_dict)
+        2    0.004    0.002    0.010    0.005 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\methods\to_dict.py:97(to_dict)
+        1    0.000    0.000    0.008    0.008 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:900(_finalize_columns_and_data)
+        1    0.000    0.000    0.008    0.008 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:977(convert_object_array)
+       40    0.002    0.000    0.008    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\internals\construction.py:999(convert)
+
+
+History features, 6,987 element sets from 5 objects: original 0.44 s, vectorised 0.08 s (5.3x faster)
+
+== Permutation importance, along-track model (test set) ==
+Reference along-track MAE: 5.853 km
+        FEATURE  MAE_INCREASE_KM  STD_KM
+    BSTAR_DELTA           1.7484  0.0110
+   PREV_DT_RATE           1.1766  0.0138
+   HORIZON_DAYS           1.1359  0.0097
+             AP           0.8029  0.0186
+MEAN_MOTION_DOT           0.5674  0.0088
+     PREV_DT_KM           0.4492  0.0040
+ PERIGEE_ALT_KM           0.2624  0.0111
+    MEAN_MOTION           0.1530  0.0068
+  APOGEE_ALT_KM           0.0856  0.0048
+          BSTAR           0.0481  0.0027
+     PREV_DR_KM           0.0189  0.0005
+    INCLINATION           0.0089  0.0046
+     PREV_DN_KM           0.0049  0.0008
+  PREV_GAP_DAYS           0.0030  0.0010
+   ECCENTRICITY          -0.0152  0.0011
+        AP_AVG3          -0.0186  0.0032
+     F107_AVG81          -0.0359  0.0017
+           F107          -0.0976  0.0076

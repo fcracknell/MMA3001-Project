@@ -1,0 +1,23 @@
+         438203 function calls (437335 primitive calls) in 0.374 seconds
+
+   Ordered by: cumulative time
+   List reduced from 834 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.003    0.003    0.374    0.374 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\performance.py:190(run)
+        1    0.010    0.010    0.242    0.242 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\features.py:194(history_features_loop)
+     1541    0.009    0.000    0.193    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\frames.py:51(to_rtn)
+     1541    0.015    0.000    0.158    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\frames.py:20(rtn_basis)
+     3082    0.036    0.000    0.117    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\numeric.py:1567(cross)
+        1    0.007    0.007    0.076    0.076 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:161(build_pairs)
+     9246    0.019    0.000    0.072    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\numeric.py:1493(moveaxis)
+        1    0.001    0.001    0.053    0.053 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:48(load_history)
+    18492    0.028    0.000    0.045    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\numeric.py:1431(normalize_axis_tuple)
+     3092    0.035    0.000    0.039    0.000 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:95(make_satrec)
+        1    0.023    0.023    0.030    0.030 C:\Users\finnc\Documents\GitHub\MMA3001-Project\src\sgp4corr\pairs.py:126(select_pair_indices)
+     3082    0.009    0.000    0.015    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\linalg\_linalg.py:2598(norm)
+        2    0.000    0.000    0.015    0.007 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pandas\core\frame.py:702(__init__)
+     4623    0.004    0.000    0.015    0.000 C:\Users\finnc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\numpy\_core\fromnumeric.py:2304(sum)
+    10981    0.013    0.000    0.013    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+
+
