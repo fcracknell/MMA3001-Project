@@ -1,0 +1,447 @@
+% MMA3001 project report -- initial draft.
+% Red [TODO: ...] notes mark things only you can fill in or must check before submission.
+\documentclass[11pt, letterpaper]{article}
+\renewcommand{\abstractname}{Summary}
+\usepackage{graphicx,caption,parskip}
+\usepackage[nodayofweek,level]{datetime}
+\usepackage{placeins}
+\usepackage[toc,page]{appendix}
+\usepackage{amsmath,booktabs,xcolor,enumitem}
+\setlist{nosep}
+\setlength{\textfloatsep}{10pt plus 2pt minus 2pt}
+\setcounter{page}{0}
+\usepackage[backend=biber, style=phys, giveninits=true, isbn=false,url=false,doi=false, biblabel=brackets]{biblatex}
+\usepackage[colorlinks]{hyperref}
+\hypersetup{
+    urlcolor = cyan,
+    citecolor = blue,
+    linkcolor = blue
+}
+\usepackage{geometry}
+\newgeometry{vmargin={25mm}, hmargin={30mm,30mm}}
+
+\addbibresource{references.bib}
+\graphicspath{{reports/figures/}}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\mydate}{\formatdate{23}{10}{2026}}
+
+\title{\textbf{Learning SGP4's Mistakes:\\Gradient-Boosted Correction of Orbit Prediction Error for LEO Debris}\\[2mm]
+\large MMA3001 Numerical Methods and Machine Learning -- Individual Project}
+
+\author{Finn Cracknell}
+
+\date{\mydate}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\vspace{10mm}
+
+\begin{abstract}
+SGP4, the standard propagator for the public satellite catalogue, accumulates kilometre-scale errors over multi-day predictions, dominated in low Earth orbit (LEO) by mis-estimated atmospheric drag. This project trains a machine-learning model to predict, and subtract, SGP4's error. Using two years of element sets for 246 debris objects and rocket bodies (1.38 million prediction pairs), a gradient-boosting model was compared with uncorrected SGP4 and with a physics-based ridge regression, on 39 objects and a three-month period never seen in training. The model reduced root-mean-square (RMSE) position error by 12.5\% (95\% CI 4.4--17.1\%), almost entirely by shrinking the largest drag-driven errors below 700~km; typical (median) errors were not significantly changed, and the ridge alternative gave no improvement. Ground truth is a later-issued element set, so the results measure consistency between element sets rather than true position error.
+
+\vspace{3mm}
+\begin{center}
+Generative AI (Claude, Anthropic) was used in this project; see Section~\ref{sec:ai} and Appendix~\ref{app:ai}.\\
+Repository: \todo{insert GitHub link}
+\end{center}
+\end{abstract}
+
+\clearpage
+
+\FloatBarrier
+
+%=====================================================================
+\section{Engineering Problem}\label{sec:1}
+%=====================================================================
+
+\textbf{Context.} Most tracked objects in LEO are inactive debris or spent rocket bodies. Operators of active spacecraft screen their planned trajectories against this population for close approaches, and the only position data publicly available for most of it are the US Space Force's two-line element sets (TLEs), together with the SGP4 propagator they are designed for \cite{hoots1980,vallado2006}. A TLE is not a measured position: it is a set of mean orbital elements fitted to tracking data, and SGP4 is a semi-analytic model that propagates those elements forward with simplified gravity and drag models.
+
+\textbf{Problem.} SGP4 predictions degrade with time. In LEO the dominant error source is drag: the TLE's drag term (B*) is itself a fitted value, and atmospheric density changes with solar and geomagnetic activity that the model cannot anticipate \cite{vallado2013,picone2002}. A small error in the drag estimate produces a timing error, an object running ahead of or behind its predicted position, that grows roughly with the square of the prediction horizon. Published comparisons put TLE errors at around a kilometre near epoch, growing to several kilometres or more within days \cite{kelso2007,levit2011}.
+
+\textbf{Why it matters.} Conjunction screening on TLEs must either use large safety margins, which raise false-alarm rates, or accept the risk of missed close approaches. Better multi-day predictions from the public catalogue would directly improve both.
+
+\textbf{Intended use.} The solution is a correction layer applied after SGP4: given an element set and a prediction horizon, it estimates SGP4's error in radial, along-track and cross-track components and subtracts it. It needs no new tracking data, only information available at the element set's epoch, so it could run as a batch step in a catalogue-wide screening pipeline.
+
+\textbf{Scope and its limitations.} The project is limited to non-manoeuvring objects (debris and rocket bodies) with perigee 300--2000~km and horizons up to 7~days. Active satellites, deep-space orbits (which use the separate SDP4 branch) and highly eccentric orbits are excluded. Most importantly, the reference ``truth'' for a prediction is a later-issued TLE evaluated at its own epoch. This is the only ground truth available at scale for debris, but it is itself an SGP4 fit with roughly kilometre-level error, so the project measures and corrects \emph{TLE-to-TLE inconsistency}, not true position error (Section~\ref{sec:7}).
+
+%=====================================================================
+\section{Inputs, Outputs and Data}\label{sec:2}
+%=====================================================================
+
+\subsection{Data sources and processing}
+
+The workflow is a chain of scripts run in order (see the README), each caching its output so later stages can be re-run independently: \texttt{download.py} (object selection from the CelesTrak catalogue \cite{celestrak_satcat}, element-set history from Space-Track \cite{spacetrack}, daily space weather \cite{celestrak_sw}); \texttt{pairs.py} and \texttt{frames.py} (propagation and RTN residuals); \texttt{features.py} (model inputs, outlier flags); \texttt{models.py} and \texttt{evaluate.py} (training and evaluation); and \texttt{performance.py} (timing, profiling, feature importance).
+
+\textbf{Object selection.} Catalogue objects were filtered to debris or rocket bodies, still in orbit, with perigee $\geq 300$~km, apogee $\leq 2000$~km and launched before the data window. Sixty were sampled at random (fixed seed) from each of five perigee bands, and the 50 per band with the most element sets (minimum 200) were kept. The result is 246 objects (198 debris, 48 rocket bodies; 46 in the 700--900~km band), with inclinations from 25$^\circ$ to 144$^\circ$. The object list is committed to the repository (\texttt{data/objects.csv}). The raw Space-Track data are not redistributed; the download script reproduces them.
+
+\textbf{Element sets.} The window is 1~July 2024 to 1~July 2026. Of 351,010 element sets downloaded, 55,793 (16\%) shared an epoch with another record (Space-Track re-issues element sets) and were removed, keeping the most recently created; none were malformed, leaving 295,217.
+
+\textbf{Prediction pairs.} For each element set $i$, up to five later element sets $j$ were chosen, one at random from each 1.4-day slice of the 0--7 day horizon range, so horizons are evenly covered. Element set $i$ is propagated to the epoch of $j$, and the residual is
+\begin{equation}
+\Delta\mathbf{r} = \mathbf{r}_{\text{SGP4}}(i \rightarrow t_j) - \mathbf{r}_{\text{SGP4}}(j \rightarrow t_j),
+\end{equation}
+expressed in the RTN frame of the reference state: $\hat{\mathbf{R}} = \mathbf{r}/|\mathbf{r}|$, $\hat{\mathbf{N}} = (\mathbf{r}\times\mathbf{v})/|\mathbf{r}\times\mathbf{v}|$, $\hat{\mathbf{T}} = \hat{\mathbf{N}}\times\hat{\mathbf{R}}$. The RTN frame separates the physically distinct error components: drag error appears almost entirely in the along-track ($T$) component. This produced 1,381,981 pairs with no SGP4 errors.
+
+Table~\ref{tab:data} summarises the data by band, and Figure~\ref{fig:checkpoint} shows SGP4's error growth. Along-track error dominates and grows faster than linearly, while radial and cross-track errors stay an order of magnitude smaller. This was the checkpoint used to confirm that the frame transformation and pairing were correct before any modelling.
+
+\begin{table}[htbp]
+\centering
+\caption{Dataset by perigee band. Along-track error is SGP4's median absolute error for 5--7 day horizons across all pairs.}
+\label{tab:data}
+\begin{tabular}{lrrr}
+\toprule
+Perigee band (km) & Objects & Element sets & Along-track error, 5--7 d (km) \\
+\midrule
+300--500   & 50 & 90,290 & 26.1 \\
+500--700   & 50 & 64,912 & 7.3 \\
+700--900   & 46 & 63,530 & 2.0 \\
+900--1200  & 50 & 71,955 & 0.7 \\
+1200--2000 & 50 & 60,323 & 0.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.58\textwidth]{checkpoint_error_growth.png}
+\caption{SGP4 error against prediction horizon in RTN components, all 1.38 million pairs. Solid: median; dashed: 95th percentile.}
+\label{fig:checkpoint}
+\end{figure}
+
+\subsection{Model inputs}
+
+Every input uses only information available at the epoch of element set $i$, so nothing from the prediction window leaks into the model (Table~\ref{tab:inputs}). Space weather is taken from the last \emph{completed} day before the epoch, and the solar-flux average is the trailing, not centred, 81-day mean.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Model inputs. All are numeric. ``Element set'' values are as published (OMM/TLE conventions).}
+\label{tab:inputs}
+\begin{tabular}{p{3.6cm}p{2.6cm}p{7.6cm}}
+\toprule
+Input & Units (domain) & Meaning \\
+\midrule
+Horizon & days (0--7] & Time from epoch $i$ to the prediction time \\
+B* & 1/Earth radii & Fitted drag term of element set $i$ \\
+Mean motion, its derivative & rev/day, rev/day$^2$ & Orbit size; rate of orbital decay \\
+Eccentricity, inclination & --, degrees & Orbit shape and orientation \\
+Perigee, apogee altitude & km (300--2000) & From mean motion and eccentricity (WGS72) \\
+F10.7, 81-day average & solar flux units & Solar EUV proxy; heats the thermosphere \\
+Ap, 3-day mean Ap & index & Geomagnetic activity; storms raise density \\
+Previous error (R, T, N), gap & km, days & Error of an element set 1--3 days older, propagated to epoch $i$ \\
+Previous drift rate & km/day$^2$ & Previous along-track error / gap$^2$ \\
+B* change & 1/Earth radii & B* of $i$ minus B* of that older element set \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ``previous'' features show how badly drag has recently been mis-estimated for this object. They are missing for 2.2\% of pairs, where no element set 1--3 days older exists.
+
+\subsection{Outputs}
+
+The model outputs a predicted SGP4 residual $(\Delta R, \Delta T, \Delta N)$ in km for a given element set and horizon. The corrected prediction is the SGP4 position minus this residual. The evaluation outputs are position-error statistics (median, 95th percentile, RMSE, in km) by altitude band and horizon, with bootstrap confidence intervals, saved as CSV files and figures in \texttt{reports/}. Function-level inputs and outputs are documented in the docstrings and the generated HTML documentation \todo{generate with pdoc and link}.
+
+\subsection{Invalid, missing and unsupported inputs}
+
+\begin{itemize}
+\item \textbf{Malformed element sets} (non-numeric fields, unparseable epochs, eccentricity outside $[0,1)$, non-positive mean motion) are dropped and counted.
+\item \textbf{Duplicate epochs:} the most recently created record is kept.
+\item \textbf{SGP4 errors} (for example, a decayed orbit) are detected from SGP4's error code and the pair is dropped and counted (none occurred).
+\item \textbf{Missing history features} are passed to the trees as missing values, which gradient boosting handles natively; for ridge they are set to zero (no recent error known).
+\item \textbf{Extreme residuals:} pairs above the 99.9th percentile of error within their altitude band and 1-day horizon bin (1,399 pairs) are flagged. They are excluded from training but kept in all evaluation.
+\item \textbf{Unsupported inputs} are not rejected automatically: horizons beyond 7~days, perigees outside 300--2000~km, manoeuvring satellites and deep-space orbits all lie outside the training domain, and a tree model will silently return predictions for them. This is a known gap (Section~\ref{sec:7}).
+\end{itemize}
+
+%=====================================================================
+\section{Computational Approach}\label{sec:3}
+%=====================================================================
+
+\subsection{Gradient boosting}
+
+The selected method is gradient-boosted regression trees, using scikit-learn's histogram-based implementation \cite{friedman2001,ke2017,pedregosa2011}. The model is a sum of $M$ small regression trees,
+\begin{equation}
+F_M(\mathbf{x}) = F_0 + \nu \sum_{m=1}^{M} h_m(\mathbf{x}),
+\end{equation}
+where each tree $h_m$ is fitted to the negative gradient of the loss at the current prediction and $\nu$ is the learning rate. With absolute-error loss, each tree is fitted to the sign of the current residual and its leaf values are set to medians, which makes the model robust to the heavy-tailed residuals in this data (the 99.9th percentile is 70--190 times the median in every band). Inputs are binned into 255 histogram bins, which is what makes training on 650,000 rows take under a minute.
+
+One model is trained per RTN component. Previous work has corrected orbit predictions from public data with neural networks \cite{peng2018ann}. Gradient boosting was chosen here because the data are tabular with mixed feature types, a setting where tree ensembles generally outperform neural networks \cite{grinsztajn2022}; because the physics involves interactions (drag error depends jointly on altitude, space weather and horizon) that trees capture without being specified; because missing values need no imputation; and because inference is fast and the model can be interrogated with feature importance.
+
+\subsection{Physical constraint: zero correction at zero horizon}
+
+An element set has no propagation error at its own epoch, so any correction must vanish as the horizon $h \to 0$. Rather than leaving the model to learn this, it is built in: the trees learn the residual per day of horizon, $g(\mathbf{x}) \approx \Delta/\tau$, with $\tau = \max(h, 1\,\text{h})$ to avoid division by near-zero horizons, and each sample is weighted by $\tau$. Because
+\begin{equation}
+\sum_k \tau_k \left| \frac{\Delta_k}{\tau_k} - g(\mathbf{x}_k) \right| = \sum_k \left| \Delta_k - \tau_k\, g(\mathbf{x}_k) \right|,
+\end{equation}
+this still minimises absolute error in km, while the prediction $\tau g(\mathbf{x})$ shrinks to near zero at short horizons.
+
+\subsection{Physics terms}
+
+A constant error $\Delta\dot{n}$ in the rate of change of mean motion gives an along-track error
+\begin{equation}
+\Delta s(t) \approx \tfrac{1}{2}\, a\, \Delta\dot{n}\, t^2,
+\end{equation}
+where $a$ is the semi-major axis \cite{vallado2013}. Interaction terms built on this form (horizon$^2$, B*$\times$horizon$^2$, previous drift rate $\times$ horizon and $\times$ horizon$^2$, previous errors $\times$ horizon) are added to the inputs of both learned models, so the known growth law does not have to be rediscovered from data.
+
+\subsection{Training, validation and test split}
+
+Pairs from the same object are strongly correlated, so a random split would leak information between training and test. The split is therefore by object and by time. Objects are assigned 70/15/15\% to training, validation and test within each altitude band (168/39/39 objects). Training pairs end before 30~December 2025; validation uses the validation objects from then until 31~March 2026; the test set is the test objects from 31~March 2026 onwards. This gives 653,011 training, 33,605 validation and 30,738 test pairs. Every test result is on objects the model has never seen, in a period it has never seen.
+
+\subsection{Settings and model development}
+
+Hyperparameters were chosen by a random search of eight configurations on a 150,000-row training sample, scored by along-track validation MAE. The default configuration is always included. The number of trees (up to 300) is chosen by early stopping on validation error, after which the model is refitted with that count. The selected settings were learning rate 0.05, maximum 127 leaves per tree, minimum 50 samples per leaf and no L2 penalty, giving 132, 172 and 230 trees for the R, T and N components.
+
+The model went through three iterations, each driven by a diagnosed failure (Table~\ref{tab:runs}):
+\begin{enumerate}
+\item \textbf{Run 1:} validation objects shared the training period. Tuning rewarded models that memorised conditions of that period, for example through the slowly varying 81-day solar flux, which effectively encodes the date. On the test period the correction made median error 22\% worse.
+\item \textbf{Run 2:} validation moved to its own period between training and test. The model now beat no correction on validation, and test RMSE fell 12\%, but short-horizon errors were still inflated.
+\item \textbf{Run 3 (final):} the zero-horizon constraint above was added to both learned models.
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Model iterations. Validation: along-track MAE; test: 3-D position error over all test pairs (km).}
+\label{tab:runs}
+\begin{tabular}{lcccc}
+\toprule
+ & Val.\ MAE & Test median & Test p95 & Test RMSE \\
+\midrule
+SGP4 (no correction) & 17.82 & 0.582 & 30.29 & 22.07 \\
+Run 1: shared val.\ period & 11.57$^\dagger$ & 0.712 & 34.48 & 20.88 \\
+Run 2: separate val.\ period & 16.71 & 0.638 & 28.83 & 19.48 \\
+Run 3: + zero-horizon constr. & 16.55 & 0.665 & 29.49 & 19.31 \\
+\bottomrule
+\multicolumn{5}{l}{\footnotesize $^\dagger$ Not comparable: run 1 validated on a different, leaked period.}
+\end{tabular}
+\end{table}
+
+\textbf{Assumptions.} The approach assumes that SGP4's error is partly predictable from information available at epoch, that the relationship learned from 168 objects transfers to others in the same altitude range, and that the training period's conditions resemble the deployment period's. It cannot anticipate space weather during the prediction window, which is the largest unpredictable driver of drag \cite{picone2002}.
+
+%=====================================================================
+\section{Alternative Solutions}\label{sec:4}
+%=====================================================================
+
+Two alternatives were implemented and two more were considered and rejected.
+
+\textbf{Baseline: uncorrected SGP4.} The operational standard and the reference that any correction must beat.
+
+\textbf{Alternative: ridge regression on physics terms.} A linear model, $\min_\beta \|\mathbf{y} - X\beta\|^2 + \alpha\|\beta\|^2$, on the eight horizon-proportional physics terms, with no intercept and the regularisation strength $\alpha$ chosen on validation from $10^0$ to $10^4$. It tests whether the known drag-growth law, with coefficients fitted from data, is enough on its own. It is fast, has five kilobytes of parameters and is fully interpretable.
+
+\textbf{Considered and rejected.} A numerical propagator (RK4 or RK45 with J2 and drag) would replace SGP4 rather than correct it, but TLEs contain mean elements, so it would need a separate orbit-determination fit, and the drag coefficient would still have to be estimated, leaving the dominant error source in place. A physics-informed neural network \cite{raissi2019} needs a governing equation to enforce, and the difference between two SGP4 fits has none; the useful part of that idea, encoding known physics, is captured instead by the physics terms and the zero-horizon constraint.
+
+%=====================================================================
+\section{Validation}\label{sec:5}
+%=====================================================================
+
+\subsection{What was validated and how}
+
+\textbf{Verification of the implementation.} 32 automated tests (pytest) check the components the results depend on. They confirm that the RTN basis is orthonormal and right-handed, that a pure along-track shift appears only in $T$, and that the rotation preserves length; that the element-set loader reproduces the reference library's TLE parser to within 1~mm over 7~days; that every pair residual matches an independent direct SGP4 computation; that an object placed slightly ahead in its orbit shows a positive along-track error equal to the expected arc length; that space weather is drawn only from completed days; that the train, validation and test sets share no objects and are correctly ordered in time; that both corrections vanish at zero horizon; that both models recover a known relationship in synthetic data; and that the vectorised history-feature code matches the original.
+The SGP4 implementation itself is the \texttt{sgp4} library \cite{rhodes_sgp4}, which is validated by its authors against the published test cases of Vallado et al.\ \cite{vallado2006}. These cases were not re-run in this project \todo{either add a test that runs them, or keep this sentence}. Physical plausibility was checked with Figure~\ref{fig:checkpoint}.
+
+\textbf{Validation of the model.} The model is validated against withheld data: 39 objects and a three-month period never used in training or tuning, with the later-issued element set as ground truth. Because the residuals are heavy-tailed, three statistics of 3-D position error are reported: the \emph{median} (typical error), the \emph{95th percentile} (bad cases) and the \emph{RMSE}, which is dominated by the largest errors, the ones that matter most for collision screening. Confidence intervals come from a bootstrap that resamples whole objects (500 resamples) \cite{efron1993}, since pairs from one object are not independent. A correction is accepted as an improvement on a measure only if the whole 95\% interval lies above zero.
+
+\textbf{Influence on model selection.} Validation data chose the hyperparameters, the number of trees and the ridge regularisation. The test set was used for the final evaluation, but test results from runs 1 and 2 were also seen before the run 3 change was made, so the test set influenced one design decision. The run 3 constraint was motivated by physics rather than tuned to the test numbers, but the final confidence intervals may be slightly optimistic as a result.
+
+\subsection{Results}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Reduction in test position error relative to SGP4 (positive is better), with 95\% bootstrap confidence intervals over objects.}
+\label{tab:bootstrap}
+\begin{tabular}{lccc}
+\toprule
+Method & Median & 95th percentile & RMSE \\
+\midrule
+Gradient boosting & $-14.3\%$ ($-36.0$ to $3.1$) & $2.6\%$ ($-3.6$ to $6.2$) & $\mathbf{12.5\%}$ \textbf{(4.4 to 17.1)} \\
+Ridge & $-128.9\%$ ($-211.4$ to $-58.7$) & $0.6\%$ ($-2.2$ to $2.2$) & $-0.4\%$ ($-1.9$ to $-0.1$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Test position error by perigee band (km).}
+\label{tab:bands}
+\begin{tabular}{lccccccccc}
+\toprule
+ & \multicolumn{3}{c}{Median} & \multicolumn{3}{c}{95th percentile} & \multicolumn{3}{c}{RMSE} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Band (km) & SGP4 & Ridge & GB & SGP4 & Ridge & GB & SGP4 & Ridge & GB \\
+\midrule
+300--500   & 4.63 & 4.65 & 4.81 & 68.5 & 68.3 & \textbf{63.5} & 38.6 & 38.8 & \textbf{33.6} \\
+500--700   & 1.73 & 1.93 & 1.97 & 38.8 & 38.0 & \textbf{34.0} & 21.2 & 21.2 & \textbf{19.0} \\
+700--900   & 0.34 & 0.79 & 0.45 & 2.25 & 4.51 & 2.91 & 1.19 & 2.09 & 1.50 \\
+900--1200  & 0.35 & 0.86 & \textbf{0.31} & 2.09 & 4.22 & 2.18 & 1.07 & 1.98 & 1.09 \\
+1200--2000 & 0.30 & 0.97 & \textbf{0.26} & 3.17 & 5.58 & 3.65 & 5.34 & 5.46 & 5.60 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{error_growth_by_band.png}
+\caption{Median test position error against horizon for each perigee band.}
+\label{fig:growth}
+\end{figure}
+
+Gradient boosting reduced RMSE by 12.5\% with a confidence interval entirely above zero (Table~\ref{tab:bootstrap}). The gain is concentrated in the two lowest bands, where RMSE fell from 38.6 to 33.6~km and from 21.2 to 19.0~km, and the 95th percentile fell by 7\% and 12\% (Table~\ref{tab:bands}). Overall, the 95th-percentile and median changes are not significant, so the improvement comes from the largest errors, beyond the 95th percentile. Typical errors are not improved: in the lowest band, the median at horizons under one day rose from 0.24 to 0.40~km, and the 700--900~km band was worse on every measure. Above 900~km the median improved slightly (Figure~\ref{fig:growth}). All 43 flagged test pairs were in the 1200--2000~km band; excluding them lowers that band's SGP4 RMSE from 5.3 to 3.8~km and leaves the comparison between methods unchanged.
+
+Ridge regression made the median worse in every band and gave no RMSE improvement. With one set of coefficients across all altitudes, its fit is dominated by the large low-altitude errors and then applied to orbits where errors are 40 times smaller, adding up to 2~km at 5--7~days above 700~km. Its validation-selected regularisation was the strongest available ($\alpha = 10^4$) for the radial and along-track components, meaning the data favoured shrinking it towards no correction at all.
+
+\subsection{Interpretation}
+
+Permutation importance \cite{breiman2001} on the test set (Figure~\ref{fig:importance}) shows the model relies on evidence that the drag estimate is wrong: the change in B* since the previous element set, the recent along-track drift rate, the horizon, the geomagnetic Ap index, and the mean motion derivative (orbital decay rate). This matches the physics. A sudden change in the fitted B* means the drag estimate is unsettled; recent drift shows the current estimate is off; and geomagnetic storms heat the thermosphere and raise density beyond what B* assumed \cite{picone2002}.
+
+The solar flux (F10.7) features have slightly negative importance: shuffling them makes predictions marginally better. Solar flux varies over months, so the model probably used it to identify the time period rather than to learn about drag. This was found on the test set, so the features were not changed afterwards.
+
+This also explains where the correction helps. Below 700~km, drag dominates and its mis-estimation leaves detectable traces in the recent history, so the largest errors are partly predictable. Above 900~km drag is weak, errors flatten to a floor of a few hundred metres set by noise in the element-set fits themselves, and there is little systematic signal to learn.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.44\textwidth]{feature_importance.png}
+\caption{Permutation importance for the along-track correction: increase in test MAE when each input is shuffled (reference MAE 5.85~km).}
+\label{fig:importance}
+\end{figure}
+
+\subsection{What the validation cannot establish}
+
+\begin{itemize}
+\item \textbf{True position accuracy.} The reference is another element set, so the results show the correction makes predictions more consistent with the \emph{next} TLE, not closer to the satellite's true position. Precise ephemerides (for example, laser-ranged satellites) would be needed for that.
+\item \textbf{Generality across time.} The test period is a single three-month window (April--June 2026) at one phase of the solar cycle. Performance in quieter conditions, or during storms more extreme than the training data (maximum Ap 144), is unknown.
+\item \textbf{Generality across objects.} With 39 test objects (7--8 per band), per-band results are uncertain, and objects outside the selected population are untested.
+\end{itemize}
+
+%=====================================================================
+\section{Optimisation and Performance}\label{sec:6}
+%=====================================================================
+
+\subsection{Runtime, memory and work per prediction}
+
+Runtimes were measured with \texttt{time.perf\_counter} as the best of several repeats \todo{state your CPU model} (Table~\ref{tab:perf}).
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Runtime and size. Batched times are per prediction for all three RTN components.}
+\label{tab:perf}
+\begin{tabular}{lcccc}
+\toprule
+ & Batched ($\mu$s) & Single call & Size & Work per prediction \\
+\midrule
+SGP4 propagation & 0.38 & 0.38 $\mu$s & -- & -- \\
+Ridge & 0.51 & 5.8 ms & 5 KB & $\approx$96 FLOPs \\
+Gradient boosting & 4.77 & 11.0 ms & 7.6 MB & $\approx$4,400 comparisons + 534 adds \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Gradient boosting costs 12.5 times one SGP4 call, but at 4.8~$\mu$s it still processes about 200,000 predictions per second on one core, so a million predictions take about five seconds; the history features add only one SGP4 propagation per element set. A single prediction takes 11~ms, almost entirely library overhead, so a deployed system should batch. The tree model has 534 trees and 135,102 nodes (about 57 bytes each); each node visit loads a record to perform one comparison, roughly one operation per 50~bytes of memory traffic. With 7.6~MB of trees, larger than a typical L2 cache, inference is bound by memory latency and branching rather than arithmetic, whereas ridge's 0.5~$\mu$s is dominated by call overhead. Training takes about 50~s per component on 653,011 rows and scales roughly linearly with the number of rows.
+
+\subsection{Profiling-driven optimisation}
+
+\texttt{cProfile} showed that the history-feature computation dominated the data pipeline. It rotated each residual into RTN with a separate call, so for one object of about 1,550 element sets it made 1,541 separate rotations (3,082 calls to NumPy's cross product), spending 0.193~s of a 0.374~s total in them. The improved version collects all propagated states first and rotates them in a single array operation. A test confirms it gives identical results to the original, which is kept for comparison.
+
+History features ran 5.3 times faster (0.44~s to 0.08~s on 6,987 element sets from five objects), the per-object pipeline 2.4 times faster (0.374~s to 0.156~s), and function calls fell from 438,203 to 99,651. The remaining time is spread across JSON parsing, satellite-record initialisation and pair selection, with no single dominant cost.
+
+\subsection{Sensitivity}
+
+All eight hyperparameter configurations beat no correction on validation (MAE 16.66--17.03~km against 17.82~km). Their 2.2\% spread is smaller than the gain over SGP4, so results are not sensitive to these settings. They are far more sensitive to validation design: separating validation in time from training (run 1 to run 2, Table~\ref{tab:runs}) reversed the conclusion. Altitude and horizon sensitivity are shown in Table~\ref{tab:bands} and Figure~\ref{fig:growth}, and excluding flagged outliers changes only the top band without changing which method is better. Sensitivity to the amount of training data, and training on low bands while testing on high ones, were not performed \todo{add if time allows, or keep as future work}.
+
+\subsection{Selected design}
+
+Gradient boosting is selected over ridge because it is the only method that reduced error on any measure, and its cost of a few microseconds per prediction is acceptable for batch screening. Ridge is faster and smaller but cannot represent the altitude dependence of the error. The recommended deployment is batch correction for objects below 700~km and horizons beyond one day, where the largest errors occur and the correction helps. Before deployment that gating rule should be confirmed on validation data, since it was identified from test results.
+
+%=====================================================================
+\section{Limitations and Lessons Learned}\label{sec:7}
+%=====================================================================
+
+\textbf{Limitations.} Beyond those in Section~\ref{sec:5}: the correction does not improve typical error and, at short horizons in low LEO, adds a few hundred metres of noise; the test set was viewed during development; and inputs outside the training domain are not rejected. The weakest point is a manoeuvring or newly fragmented object, whose history features would describe a different orbit, so a production version should flag large B* jumps and out-of-range altitudes and fall back to uncorrected SGP4. No feature can capture space weather during the prediction window, which bounds the achievable improvement.
+
+\textbf{Lessons learned.}
+\begin{enumerate}
+\item \textbf{Validation design matters more than model tuning.} A validation set that shared the training period produced confident but wrong model choices; separating it in time changed the conclusion from ``the correction hurts'' to ``the correction helps the largest errors''.
+\item \textbf{Physical constraints are cheap and effective.} Building in the requirement that the correction vanish at zero horizon fixed most of the short-horizon damage in ridge without any tuning.
+\item \textbf{One summary statistic can mislead.} The same model is 12.5\% better by RMSE and 14\% worse by median; with heavy-tailed errors, which statistic matters depends on the application.
+\end{enumerate}
+
+\textbf{Proposed improvements,} in order of expected value: validate against precise ephemerides for a subset of objects; fit separate models or add gating by altitude regime, chosen on validation data; add forecast space weather as an input; run the training-size and altitude-generalisation studies; and add explicit input-domain checks.
+
+%=====================================================================
+\section{AI Use and Reflection}\label{sec:ai}
+%=====================================================================
+
+\textbf{Tools.} Claude (Anthropic), used through the Claude app, October 2026.
+
+\textbf{Use and level of contribution.} Claude critiqued my initial proposal (identifying that TLE ground truth cannot support sub-metre accuracy claims, and suggesting the LEO scope), produced a staged plan, drafted all source modules and tests, helped troubleshoot PowerShell, Git and GitHub problems, helped interpret results, and produced an initial draft of this report. Its contribution to code and first-draft text was substantial \todo{give your own estimate}. I ran every stage on my own machine and data. AI was used to make a problem spanning orbital mechanics, data engineering and machine learning achievable in 2.5 weeks, with fast feedback on errors. A detailed log is in Appendix~\ref{app:ai}.
+
+\textbf{How AI output was checked.} Every module has unit tests, run before any results were used; the checkpoint plot (Figure~\ref{fig:checkpoint}) had to show physically sensible error growth before modelling began; results were checked against physical expectations and an uncorrected baseline; and claimed improvements had to survive an object-level bootstrap.
+
+\textbf{Decisions that remained mine} \todo{check this matches what you decided}: the topic and framing; accepting TLE ground truth with its limitation stated; restricting the scope to LEO debris; which results to trust and when to stop iterating; and not changing features after seeing test-set importance.
+
+\textbf{Errors and unhelpful suggestions.} The most consequential was the AI's original split, which put validation in the same period as training; run 1 showed the correction making test error worse, and the cause was traced to this design. Its first models also lacked the zero-horizon constraint, and its ridge model had an intercept, inflating short-horizon errors. Smaller errors: it wrote the space-weather column names from memory (confirmed only by running the code), overestimated expected error sizes by about ten times before the checkpoint, and gave Linux shell commands that fail in PowerShell. One bug it introduced in the results summary was caught by its own test run before reaching me.
+
+\textbf{Effect on my understanding and workflow.} \todo{Write this yourself, in your own words: for example, what you now understand about SGP4, RTN frames, data leakage and bootstrap validation that you did not before, and how relying on AI-drafted code changed how you checked work. This section is assessed on your own reflection.}
+
+\clearpage
+
+\begin{appendices}
+
+\section{Bibliography}\label{sec:bib}
+
+\printbibliography[heading=none]
+
+\clearpage
+
+\section{Hyperparameter Search}\label{app:search}
+
+\begin{table}[htbp]
+\centering
+\caption{Random search, run 3 (along-track validation MAE; uncorrected 17.82~km).}
+\begin{tabular}{ccccc}
+\toprule
+Learning rate & Max leaves & Min leaf size & L2 & Validation MAE (km) \\
+\midrule
+0.05 & 127 & 50  & 0  & \textbf{16.662} \\
+0.10 & 31  & 50  & 0  & 16.696 \\
+0.05 & 127 & 200 & 0  & 16.711 \\
+0.03 & 127 & 50  & 10 & 16.747 \\
+0.10 & 63  & 200 & 10 & 16.805 \\
+0.10 & 63  & 50  & 10 & 16.809 \\
+0.20 & 63  & 50  & 0  & 16.912 \\
+0.05 & 15  & 20  & 0  & 17.029 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Use of Generative AI: Detailed Log}\label{app:ai}
+
+\subsection{Technology Used}
+
+All generative AI use for this project was through Claude (Anthropic), via the Claude app, between 5 and 23 October 2026.
+
+\subsection{Prompts Used, Information Generated, and How it Was Implemented}
+
+\todo{Fill in from your AI\_LOG.md and the conversation history. Suggested entries, each with prompt / what was generated / how it was used and checked:}
+
+\textbf{(i) Project scoping and plan.} Prompt: my initial project notes and the brief. Generated: critique of the ground-truth choice, a reduced scope and a staged plan. Used: adopted the LEO scope; accepted TLE ground truth with its limitation stated.
+
+\textbf{(ii) Data download and object selection (\texttt{download.py}).} Generated: the catalogue filter, Space-Track batching and rate limiting. Checked by: inspecting the object list (only DEB and R/B) and element-set counts per band.
+
+\textbf{(iii) Pairs, RTN frame and features.} Generated: \texttt{pairs.py}, \texttt{frames.py}, \texttt{features.py} and tests. Checked by: 22 passing tests and the checkpoint plot.
+
+\textbf{(iv) Models and evaluation.} Generated: \texttt{models.py}, \texttt{evaluate.py}. Checked by: tests on synthetic data with a known answer; three iterations driven by failures in runs 1 and 2.
+
+\textbf{(v) Performance analysis and optimisation.} Generated: \texttt{performance.py} and the vectorised history features. Checked by: a test confirming identical results, and measured speed-up.
+
+\textbf{(vi) Report drafting.} Generated: this initial draft from my repository, results and the brief. Used: \todo{describe your edits}.
+
+\end{appendices}
+
+\end{document}

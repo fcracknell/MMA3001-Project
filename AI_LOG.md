@@ -4,3 +4,4 @@ Claude designed the original split with validation in the same period as trainin
 
 Claude used cProfile output to find the history-feature bottleneck and vectorised it; I verified it with a test confirming identical results, and measured a 5.3x speed-up.
 
+Claude drafted the initial report from the repository, results files and brief; I reviewed and edited it.
