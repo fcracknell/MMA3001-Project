@@ -139,6 +139,77 @@ def history_features(
     propagate *p* to the epoch of *i* and express the difference in RTN. A
     large along-track value means drag has recently been mis-estimated.
 
+    This is the vectorised version: propagations are collected first and all
+    residuals are rotated into RTN in a single array operation (see
+    ``history_features_loop`` for the original).
+
+    Args:
+        history: Clean history for one object from ``pairs.load_history``.
+        min_gap_days: Minimum age of the earlier element set.
+        max_gap_days: Maximum age of the earlier element set.
+
+    Returns:
+        Table with ``NORAD_CAT_ID``, ``EPOCH`` and the ``HISTORY_FEATURES``
+        columns, one row per element set. Values are NaN where no earlier
+        element set falls in the allowed gap or SGP4 reports an error.
+
+    Raises:
+        ValueError: If the gaps are not ``0 < min_gap_days <= max_gap_days``.
+    """
+    if not 0 < min_gap_days <= max_gap_days:
+        raise ValueError("Require 0 < min_gap_days <= max_gap_days.")
+    out = history[["NORAD_CAT_ID", "EPOCH"]].copy()
+    for column in HISTORY_FEATURES:
+        out[column] = np.nan
+    if len(history) < 2:
+        return out
+
+    t = ((history["EPOCH"] - history["EPOCH"].iloc[0]) / pd.Timedelta(days=1)).to_numpy()
+    prev = np.searchsorted(t, t - min_gap_days, side="right") - 1     # last index old enough
+    gap = t - t[np.maximum(prev, 0)]
+    usable = np.flatnonzero((prev >= 0) & (gap <= max_gap_days))
+    if len(usable) == 0:
+        return out
+
+    sats = [make_satrec(row) for row in history.to_dict("records")]
+    pred = [sats[prev[i]].sgp4_tsince(gap[i] * 1440.0) for i in usable]
+    ref = [sats[i].sgp4_tsince(0.0) for i in usable]
+    ok = np.array([p[0] == 0 and r[0] == 0 for p, r in zip(pred, ref)])
+    usable = usable[ok]
+    if len(usable) == 0:
+        return out
+    r_pred = np.array([p[1] for p, good in zip(pred, ok) if good])
+    r_ref = np.array([r[1] for r, good in zip(ref, ok) if good])
+    v_ref = np.array([r[2] for r, good in zip(ref, ok) if good])
+
+    rtn = to_rtn(r_pred - r_ref, r_ref, v_ref)
+    g = gap[usable]
+    bstar = history["BSTAR"].to_numpy()
+    out.iloc[usable, out.columns.get_indexer(HISTORY_FEATURES)] = np.column_stack(
+        [g, rtn[:, 0], rtn[:, 1], rtn[:, 2], rtn[:, 1] / g**2, bstar[usable] - bstar[prev[usable]]]
+    )
+    return out
+
+
+def history_features_loop(
+    history: pd.DataFrame,
+    min_gap_days: float = 1.0,
+    max_gap_days: float = 3.0,
+) -> pd.DataFrame:
+    """Original, unvectorised version of ``history_features``.
+
+    Kept for verification (the tests check both give identical results) and
+    for the before/after timing in ``performance.py``. It rotates each
+    residual into RTN with a separate call, which profiling showed to be the
+    pipeline's bottleneck.
+
+    Compute, for each element set, how well an earlier one predicted it.
+
+    For element set *i*, take the most recent earlier element set *p* that is
+    at least ``min_gap_days`` older (and no more than ``max_gap_days``),
+    propagate *p* to the epoch of *i* and express the difference in RTN. A
+    large along-track value means drag has recently been mis-estimated.
+
     Args:
         history: Clean history for one object from ``pairs.load_history``.
         min_gap_days: Minimum age of the earlier element set.

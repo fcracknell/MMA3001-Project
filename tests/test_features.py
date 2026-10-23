@@ -8,7 +8,7 @@ import pytest
 
 from sgp4corr.features import (
     HISTORY_FEATURES, add_orbit_features, add_space_weather, flag_outliers,
-    history_features, load_space_weather,
+    history_features, history_features_loop, load_space_weather,
 )
 from sgp4corr.pairs import load_history
 from test_pairs import record
@@ -101,3 +101,16 @@ def test_flag_outliers_is_relative_to_band_and_horizon():
     assert flags.groupby(table["BAND"]).mean().between(0.005, 0.015).all()
     with pytest.raises(ValueError):
         flag_outliers(table, quantile=0)
+
+
+def test_vectorised_history_features_match_original(tmp_path):
+    rng = np.random.default_rng(4)
+    days = np.cumsum(rng.uniform(0.1, 1.5, 60))
+    records = [record(float(d), mean_anomaly_shift=float(3.0 * d), BSTAR=str(1e-4 * (1 + rng.random())))
+               for d in days]
+    path = tmp_path / "25544.json"
+    path.write_text(json.dumps(records))
+    history, _ = load_history(path)
+    fast, slow = history_features(history), history_features_loop(history)
+    assert fast[HISTORY_FEATURES].notna().sum().min() > 30
+    pd.testing.assert_frame_equal(fast, slow, check_exact=False, rtol=1e-10, atol=1e-12)
