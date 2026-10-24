@@ -9,13 +9,16 @@ Three steps, each cached on disk so re-running skips work already done:
 A final ``trim_objects`` step keeps the objects with the densest history in each
 altitude band and writes the definitive object list to ``data/objects.csv``.
  
-Usage:
-    export SPACETRACK_USER="you@example.com"
-    export SPACETRACK_PASS="your-password"
-    python -m sgp4corr.download --start 2024-07-01 --end 2026-07-01
- 
+Usage (from the repository root; Windows PowerShell shown, see the README
+for macOS/Linux):
+
+    $env:SPACETRACK_USER="you@example.com"
+    $env:SPACETRACK_PASS="your-password"
+    python src/sgp4corr/download.py --start 2024-07-01 --end 2026-07-01
+
 Space-Track credentials are read from environment variables and must never be
-committed. Raw Space-Track data stays in ``data/raw/`` (git-ignored).
+committed. Raw Space-Track data stays in ``data/raw/`` (git-ignored), because
+Space-Track's user agreement restricts redistribution.
 """
  
 from __future__ import annotations
