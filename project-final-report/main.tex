@@ -47,7 +47,7 @@ SGP4, the standard propagator for the public satellite catalogue, accumulates ki
 
 \vspace{3mm}
 \begin{center}
-Generative AI (Claude, Anthropic) was used in this project; see Section~\ref{sec:ai} and Appendix~\ref{app:ai}.\\
+Generative AI (Claude, Anthropic) was used in this project; see Section~\ref{sec:ai}.\\
 Repository: \todo{insert GitHub link}
 \end{center}
 \end{abstract}
@@ -241,7 +241,7 @@ Two alternatives were implemented and two more were considered and rejected.
 
 \subsection{What was validated and how}
 
-\textbf{Verification of the implementation.} 32 automated tests (pytest; summarised in Appendix~\ref{app:tests}) check the frame transformation, the element-set loader against the reference TLE parser (agreement within 1~mm over 7~days), each pair residual against an independent SGP4 computation, the absence of leakage in space weather and in the split, the zero-horizon constraint, recovery of a known relationship in synthetic data, and equivalence of the optimised and original code.
+\textbf{Verification of the implementation.} 32 automated tests (pytest; summarised in Appendix~\ref{app:tests}, all passing, with full results in \texttt{reports/test\_report.html}) check the frame transformation, the element-set loader against the reference TLE parser (agreement within 1~mm over 7~days), each pair residual against an independent SGP4 computation, the absence of leakage in space weather and in the split, the zero-horizon constraint, recovery of a known relationship in synthetic data, and equivalence of the optimised and original code.
 The SGP4 implementation itself is the \texttt{sgp4} library \cite{rhodes_sgp4}, which is validated by its authors against the published test cases of Vallado et al.\ \cite{vallado2006}. These cases were not re-run in this project \todo{either add a test that runs them, or keep this sentence}. Physical plausibility was checked with Figure~\ref{fig:checkpoint}.
 
 \textbf{Validation of the model.} The model is validated against withheld data: 39 objects and a three-month period never used in training or tuning, with the later-issued element set as ground truth. Because the residuals are heavy-tailed, three statistics of 3-D position error are reported: the \emph{median} (typical error), the \emph{95th percentile} (bad cases) and the \emph{RMSE}, which is dominated by the largest errors, the ones that matter most for collision screening. Confidence intervals come from a bootstrap that resamples whole objects (500 resamples) \cite{efron1993}, since pairs from one object are not independent; this extends the regression metrics of unit topic 5.5 to correlated data. A correction is accepted as an improvement on a measure only if the whole 95\% interval lies above zero.
@@ -382,7 +382,7 @@ Gradient boosting is selected because it is the only method that reduced error o
 
 \textbf{Tools.} Claude (Anthropic), used through the Claude app, October 2026.
 
-\textbf{Use and level of contribution.} Claude critiqued my initial proposal (identifying that TLE ground truth cannot support sub-metre accuracy claims, and suggesting the LEO scope), produced a staged plan, drafted all source modules and tests, helped troubleshoot PowerShell, Git and GitHub problems, helped interpret results, and produced an initial draft of this report. Its contribution to code and first-draft text was substantial \todo{give your own estimate}. I ran every stage on my own machine and data. AI was used to make a problem spanning orbital mechanics, data engineering and machine learning achievable in 2.5 weeks, with fast feedback on errors. A detailed log is in Appendix~\ref{app:ai}.
+\textbf{Use and level of contribution.} Claude critiqued my initial proposal (identifying that TLE ground truth cannot support sub-metre accuracy claims, and suggesting the LEO scope), produced a staged plan, drafted all source modules and tests, helped troubleshoot PowerShell, Git and GitHub problems, helped interpret results, and produced an initial draft of this report. Its contribution to code and first-draft text was substantial \todo{give your own estimate}. I ran every stage on my own machine and data. AI was used to make a problem spanning orbital mechanics, data engineering and machine learning achievable in 2.5 weeks, with fast feedback on errors. A running log of AI use is kept in \texttt{AI\_LOG.md} in the repository.
 
 \textbf{How AI output was checked.} Every module has unit tests, run before any results were used; the checkpoint plot (Figure~\ref{fig:checkpoint}) had to show physically sensible error growth before modelling began; results were checked against physical expectations and an uncorrected baseline; and claimed improvements had to survive an object-level bootstrap.
 
@@ -459,28 +459,6 @@ Module & What the tests confirm \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\section{Use of Generative AI: Detailed Log}\label{app:ai}
-
-\subsection{Technology Used}
-
-All generative AI use for this project was through Claude (Anthropic), via the Claude app, between 5 and 23 October 2026.
-
-\subsection{Prompts Used, Information Generated, and How it Was Implemented}
-
-\todo{Fill in from your AI\_LOG.md and the conversation history. Suggested entries, each with prompt / what was generated / how it was used and checked:}
-
-\textbf{(i) Project scoping and plan.} Prompt: my initial project notes and the brief. Generated: critique of the ground-truth choice, a reduced scope and a staged plan. Used: adopted the LEO scope; accepted TLE ground truth with its limitation stated.
-
-\textbf{(ii) Data download and object selection (\texttt{download.py}).} Generated: the catalogue filter, Space-Track batching and rate limiting. Checked by: inspecting the object list (only DEB and R/B) and element-set counts per band.
-
-\textbf{(iii) Pairs, RTN frame and features.} Generated: \texttt{pairs.py}, \texttt{frames.py}, \texttt{features.py} and tests. Checked by: 22 passing tests and the checkpoint plot.
-
-\textbf{(iv) Models and evaluation.} Generated: \texttt{models.py}, \texttt{evaluate.py}. Checked by: tests on synthetic data with a known answer; three iterations driven by failures in runs 1 and 2.
-
-\textbf{(v) Performance analysis and optimisation.} Generated: \texttt{performance.py} and the vectorised history features. Checked by: a test confirming identical results, and measured speed-up.
-
-\textbf{(vi) Report drafting.} Generated: this initial draft from my repository, results and the brief. Used: \todo{describe your edits}.
 
 \end{appendices}
 
