@@ -118,13 +118,8 @@ pdoc src/sgp4corr -o docs
 
 Development used Git with descriptive commits. The documentation and report stages were developed on feature branches (`docs/readme`, `docs/html`, `test/report`, `report/final`) and merged into `main` through pull requests. Tags mark the three model iterations described in the report:
 
-| Tag | Model iteration |
-|---|---|
-| `run1-shared-validation` | Validation set shared the training period; leakage found |
-| `run2-time-split` | Validation moved to its own time period |
-| `run3-final` | Corrections constrained to vanish at zero horizon (final model) |
+The tag `run3-final` marks the final model described in the report (corrections constrained to vanish at zero horizon). The two earlier model iterations were not committed separately; their outputs are preserved in `reports/run1_output.txt` (validation shared the training period) and `reports/run2_output.txt` (validation moved to its own time period), and the changes between runs are described in Section 3.5 of the report.
 
-Saved outputs of each run are in `reports/run1_output.txt`, `run2_output.txt` and `run3_output.txt`.
 
 ## AI acknowledgement
 
