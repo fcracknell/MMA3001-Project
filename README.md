@@ -29,7 +29,6 @@ MMA3001-Project/
 │   └── figures/            # Figures used in the report
 ├── report/                 # Report source (LaTeX) and PDF
 ├── docs/                   # HTML documentation of the source code (pdoc)
-├── AI_LOG.md               # Log of generative AI use
 ├── requirements.txt
 └── LICENSE                 # GNU GPL v3
 ```
@@ -136,7 +135,7 @@ Generative AI (Claude, by Anthropic, via the Claude app, October 2026) was used 
 - **Interpretation:** reading the results tables.
 - **Writing:** drafting the report and this README.
 
-All code was run, tested and checked by me against physical expectations and an uncorrected baseline, and I made the key decisions on scope, ground truth, model iterations and when to stop. Errors made by the AI, and how they were found, are recorded in `AI_LOG.md` and discussed in the report's AI reflection (Section 8). I take full responsibility for all code, results and conclusions in this repository.
+All code was run, tested and checked by me against physical expectations and an uncorrected baseline, and I made the key decisions on scope, ground truth, model iterations and when to stop. Errors made by the AI, and how they were found, are discussed in the report's AI reflection (Section 8). I take full responsibility for all code, results and conclusions in this repository.
 
 ## Licence
 
